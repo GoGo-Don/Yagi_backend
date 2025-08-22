@@ -10,11 +10,14 @@ pub enum AppError {
     #[error("Database error: {0}")]
     DbError(#[from] rusqlite::Error),
 
+    #[error("Connection pool error: {0}")]
+    PoolError(#[from] r2d2::Error),
+
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
     #[error("Parsing error: {0}")]
-    ParseError(ParseEnumError),
+    ParseError(#[from] ParseEnumError),
 }
 
 /// Error type for enum parsing failures with context.
@@ -49,10 +52,21 @@ impl ResponseError for AppError {
     fn error_response(&self) -> HttpResponse {
         match self {
             AppError::DbError(e) => {
+                // Log internal database errors with detail
+                tracing::error!("Database error: {:?}", e);
                 HttpResponse::InternalServerError().body(format!("Internal database error: {}", e))
             }
-            AppError::InvalidInput(msg) => HttpResponse::BadRequest().body(msg.clone()),
+            AppError::PoolError(e) => {
+                // Log internal database errors with detail
+                tracing::error!("Connection pool error: {:?}", e);
+                HttpResponse::InternalServerError().body(format!("Internal database error: {}", e))
+            }
+            AppError::InvalidInput(msg) => {
+                tracing::warn!("Invalid input error: {}", msg);
+                HttpResponse::BadRequest().body(msg.clone())
+            }
             AppError::ParseError(e) => {
+                tracing::warn!("Parsing error: {}", e);
                 HttpResponse::BadRequest().body(format!("Parsing error: {}", e))
             }
         }

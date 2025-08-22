@@ -1,7 +1,7 @@
 //!**Main entry point for the Livestock Management Backend server**
 //!
 //! This module is responsible for initializing the logging infrastructure,
-//! managing database connection and schema migrations using Refinery,
+//! managing database connection,
 //! and launching the Actix web server with all registered routes.
 //!
 //! It ensures that the server only starts after a successful migration,
@@ -40,25 +40,7 @@ async fn main() -> std::io::Result<()> {
 
     info!("Starting Livestock Management Backend Server");
 
-    // Open the SQLite database file (creates if it doesn't exist).
-    let conn = match Connection::open("livestock.db") {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to open database file: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    //// Run database migrations to ensure schema is up-to-date.
-    //if let Err(migration_err) = db::run_migrations(&mut conn) {
-    //    tracing::error!("Database migration failed: {}", migration_err);
-    //    // Exit to avoid running server with inconsistent DB schema.
-    //    std::process::exit(1);
-    //}
-    //tracing::info!("Database migrations completed successfully");
-
-    // Wrap SQLite connection in DbPool for shared use in request handlers.
-    let db_pool = DbPool::new_with_conn(conn);
+    let db_pool = DbPool::new("livestock.db").expect("Failed to create DB pool");
 
     // Build and run Actix web server.
     // Register logging middleware and route definitions.

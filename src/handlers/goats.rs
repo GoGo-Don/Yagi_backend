@@ -33,15 +33,8 @@ use tracing::{debug, error, info, trace, warn};
 /// - Error: On any failure loading individual goats.
 pub async fn get_goats(db: web::Data<DbPool>) -> Result<impl Responder, AppError> {
     info!("GET /goats called");
-    let conn = db.conn.lock().map_err(|err| {
-        error!("Failed locking conn: {:?}", err);
-        // Convert PoisonError to rusqlite::Error - typically create a custom DbError variant or use a generic error
-        // Here we create a rusqlite::Error::SqliteFailure to fit your AppError variant
-        rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::ErrorCode::DatabaseBusy as i32),
-            Some("Mutex poisoned".to_string()),
-        )
-    })?;
+    let conn = db.get_conn()?;
+    trace!("Acquired connection in get_goats");
     let mut stmt = conn.prepare("SELECT id FROM goats")?;
     let goat_ids = stmt.query_map([], |row| row.get(0))?;
 
@@ -49,7 +42,7 @@ pub async fn get_goats(db: web::Data<DbPool>) -> Result<impl Responder, AppError
     for id_res in goat_ids {
         let id = id_res?;
         trace!(goat_id = id, "Loading goat details");
-        match db.load_goat_details(id) {
+        match db.load_goat_details(&conn, id) {
             Ok(goat) => goats.push(goat),
             Err(e) => {
                 error!(goat_id = id, error=?e, "Failed to load goat details");
@@ -85,7 +78,8 @@ pub async fn add_goat(
     new_goat: web::Json<Goat>,
 ) -> Result<impl Responder, AppError> {
     info!(name = %new_goat.name, "POST /goats called");
-    let mut conn = db.conn.lock().unwrap();
+    let mut conn = db.get_conn()?;
+    trace!("Got connection");
 
     let tx = conn.transaction()?;
     let params = GoatParams::new(&new_goat)?;
@@ -125,24 +119,19 @@ pub async fn add_goat(
 /// Handler for updating an existing goat and its relations by ID.
 ///
 /// # HTTP Method
-///
 /// - `PUT /goats`
 ///
 /// # Request
-///
 /// - JSON payload conforming to `Goat` struct, with `id` field.
 ///
 /// # Success
-///
 /// - Returns HTTP 200 on successful update.
 ///
 /// # Errors
-///
 /// - Returns HTTP 400 for missing `id` or if goat does not exist.
 /// - Returns other errors on database failure.
 ///
 /// # Logs
-///
 /// - Info: Receipt of update, including `id`.
 /// - Debug: After base update, and clearing old relations.
 /// - Trace: Adding vaccine and disease links.
@@ -157,7 +146,8 @@ pub async fn update_goat(
 
     info!(goat_id = id, "PUT /goats called");
 
-    let mut conn = db.conn.lock().unwrap();
+    let mut conn = db.get_conn()?;
+    trace!("Got connection");
     let tx = conn.transaction()?;
 
     let goat_params = GoatParams::new(&goat)?;
@@ -206,23 +196,18 @@ pub async fn update_goat(
 /// Handler for deleting a goat by ID.
 ///
 /// # HTTP Method
-///
 /// - `DELETE /goats`
 ///
 /// # Request
-///
 /// - JSON payload containing the goat's `id`.
 ///
 /// # Success
-///
 /// - Returns HTTP 200 when deletion is successful.
 ///
 /// # Errors
-///
 /// - Returns HTTP 400 if no goat matches the provided ID.
 ///
 /// # Logs
-///
 /// - Info: Receipt of delete request.
 /// - Warn: If goat not found.
 /// - Info: Successful deletion.
@@ -232,7 +217,7 @@ pub async fn delete_goat(
 ) -> Result<impl Responder, AppError> {
     info!(goat_id = id_payload.id, "DELETE /goats called");
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.get_conn()?;
     let affected = conn.execute("DELETE FROM goats WHERE id = ?", &[&id_payload.id])?;
 
     if affected == 0 {

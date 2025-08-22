@@ -30,7 +30,7 @@ async fn test_db_connection() {
 async fn test_get_goats_endpoint() {
     // Initialize tracing logger (does nothing if already initialized)
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("debug")
+        .with_env_filter("trace")
         .with_test_writer()
         .try_init();
 
