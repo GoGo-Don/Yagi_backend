@@ -181,7 +181,7 @@ impl DbPool {
             .filter_map(Result::ok)
             .collect();
 
-        debug!(goat_id, count = vaccines.len(), "Retrieved vaccines");
+        trace!(goat_id, count = vaccines.len(), "Retrieved vaccines");
         Ok(vaccines)
     }
 
@@ -215,7 +215,7 @@ impl DbPool {
             .filter_map(Result::ok)
             .collect();
 
-        debug!(goat_id, count = diseases.len(), "Retrieved diseases");
+        trace!(goat_id, count = diseases.len(), "Retrieved diseases");
         Ok(diseases)
     }
 }

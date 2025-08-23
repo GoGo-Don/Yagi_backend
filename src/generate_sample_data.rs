@@ -5,7 +5,7 @@ use rand::{Rng, seq::SliceRandom};
 use rusqlite::{Connection, Result, params};
 
 fn main() -> Result<()> {
-    let conn = Connection::open("src/sample_livestock.db")?;
+    let conn = Connection::open("sample_livestock.db")?;
 
     // Load schema from file or ensure created manually before running this
 
@@ -68,8 +68,8 @@ fn main() -> Result<()> {
         .filter_map(Result::ok)
         .collect();
 
-    // Insert ~200 goats with random associations
-    for i in 1..=200 {
+    // Insert ~20 goats with random associations
+    for i in 1..=20 {
         let breed = breeds[rng.gen_range(0..breeds.len())];
         let name = format!("Goat{}", i);
         let gender = genders[rng.gen_range(0..genders.len())];

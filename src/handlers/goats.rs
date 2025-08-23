@@ -32,9 +32,9 @@ use tracing::{debug, error, info, trace, warn};
 /// - Trace: Loading each goat by ID.
 /// - Error: On any failure loading individual goats.
 pub async fn get_goats(db: web::Data<DbPool>) -> Result<impl Responder, AppError> {
-    info!("GET /goats called");
+    debug!("GET /goats called");
     let conn = db.get_conn()?;
-    trace!("Acquired connection in get_goats");
+    debug!("Acquired connection in get_goats");
     let mut stmt = conn.prepare("SELECT id FROM goats")?;
     let goat_ids = stmt.query_map([], |row| row.get(0))?;
 
@@ -77,9 +77,9 @@ pub async fn add_goat(
     db: web::Data<DbPool>,
     new_goat: web::Json<Goat>,
 ) -> Result<impl Responder, AppError> {
-    info!(name = %new_goat.name, "POST /goats called");
+    debug!(name = %new_goat.name, "POST /goats called");
     let mut conn = db.get_conn()?;
-    trace!("Got connection");
+    info!("Connection recieved in add_goat instance");
 
     let tx = conn.transaction()?;
     let params = GoatParams::new(&new_goat)?;
@@ -99,7 +99,7 @@ pub async fn add_goat(
             "INSERT INTO goat_vaccines (goat_id, vaccine_id) VALUES (?, ?)",
             &[&goat_id, &vaccine_id],
         )?;
-        trace!(goat_id, vaccine_id, "Linked vaccine");
+        info!(goat_id, vaccine_id, "Linked vaccine");
     }
 
     for disease in &new_goat.diseases {
@@ -140,21 +140,24 @@ pub async fn update_goat(
     db: web::Data<DbPool>,
     goat: web::Json<Goat>,
 ) -> Result<impl Responder, AppError> {
-    let id = goat
-        .id
-        .ok_or_else(|| AppError::InvalidInput("Goat ID required for update".to_string()))?;
+    let id = goat.id.ok_or_else(|| {
+        error!("Goat ID not valid");
+        AppError::InvalidInput("Goat ID required for update".to_string())
+    })?;
 
     info!(goat_id = id, "PUT /goats called");
 
     let mut conn = db.get_conn()?;
-    trace!("Got connection");
     let tx = conn.transaction()?;
 
     let goat_params = GoatParams::new(&goat)?;
     let params = goat_params.as_update_params(&id);
+    debug!("Params loaded in update_goat");
 
     let affected = tx.execute(
-        "UPDATE goats SET breed = ?, name = ?, gender = ?, offspring = ?, cost = ?, weight = ?, current_price = ?, diet = ?, last_bred = ?, health_status = ? WHERE id = ?",
+        "UPDATE goats 
+         SET breed = ?, name = ?, gender = ?, offspring = ?, cost = ?, weight = ?, current_price = ?, diet = ?, last_bred = ?, health_status = ? 
+         WHERE id = ?",
         params,
     )?;
 

@@ -17,7 +17,7 @@ pub enum Breed {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "PascalCase")]
 pub enum Gender {
     Male,
     Female,

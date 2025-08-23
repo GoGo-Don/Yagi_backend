@@ -11,9 +11,9 @@ use tracing::{debug, trace};
 /// Converts a database string to `Gender` enum with detailed error reporting.
 pub fn str_to_gender(s: &str) -> Result<Gender, AppError> {
     trace!("Parsing Gender from '{}'", s);
-    match s.to_lowercase().as_str() {
-        "male" => Ok(Gender::Male),
-        "female" => Ok(Gender::Female),
+    match s {
+        "Male" => Ok(Gender::Male),
+        "Female" => Ok(Gender::Female),
         other => {
             debug!("Failed to parse Gender enum from '{}'", other);
             Err(AppError::ParseError(ParseEnumError::new(other, "Gender")))
@@ -24,8 +24,8 @@ pub fn str_to_gender(s: &str) -> Result<Gender, AppError> {
 /// Converts a `Gender` enum to a database string.
 pub fn gender_to_str(gender: &Gender) -> &str {
     match gender {
-        Gender::Male => "male",
-        Gender::Female => "female",
+        Gender::Male => "Male",
+        Gender::Female => "Female",
     }
 }
 
@@ -71,12 +71,6 @@ pub fn breed_to_str(breed: &Breed) -> &str {
 ///
 /// Safely stores owned strings and numeric fields, exposing parameters for query bindings.
 /// This design avoids lifetime issues by encapsulating all necessary data.
-///
-/// Usage:
-/// ```
-/// let params = GoatParams::new(&goat)?;
-/// tx.execute(sql, &params.as_params())?;
-/// ```
 pub struct GoatParams {
     breed: String,
     name: String,
