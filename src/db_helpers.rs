@@ -4,8 +4,7 @@
 //! along with detailed logging and error handling.
 
 use crate::errors::{AppError, ParseEnumError};
-use crate::models::{Breed, Gender, Goat};
-use rusqlite::ToSql;
+use shared::{Breed, Gender};
 use tracing::{debug, trace};
 
 /// Converts a database string to `Gender` enum with detailed error reporting.
@@ -64,90 +63,5 @@ pub fn breed_to_str(breed: &Breed) -> &str {
         Breed::Chegu => "Chegu",
         Breed::Jakhrana => "Jakhrana",
         Breed::Other(name) => name,
-    }
-}
-
-/// Structure owning strings and values required for goat database queries.
-///
-/// Safely stores owned strings and numeric fields, exposing parameters for query bindings.
-/// This design avoids lifetime issues by encapsulating all necessary data.
-pub struct GoatParams {
-    breed: String,
-    name: String,
-    gender: String,
-    diet: String,
-    last_bred: String,
-    health_status: String,
-    offspring: i32,
-    cost: f64,
-    weight: f64,
-    current_price: f64,
-}
-
-impl GoatParams {
-    /// Creates a new `GoatParams` from a `Goat` by cloning and converting relevant fields.
-    ///
-    /// # Errors
-    ///
-    /// Currently does not error but uses a Result wrapper for future-proofing and consistency.
-    ///
-    /// # Logging
-    ///
-    /// Logs the formation of query parameters at the debug level.
-    pub fn new(goat: &Goat) -> Result<Self, AppError> {
-        let breed = breed_to_str(&goat.breed).to_string();
-        let name = goat.name.clone();
-        let gender = gender_to_str(&goat.gender).to_string();
-        let diet = goat.diet.clone();
-        let last_bred = goat.last_bred.clone().unwrap_or_default();
-        let health_status = goat.health_status.clone();
-
-        debug!("GoatParams created for goat '{}'", &name);
-
-        Ok(Self {
-            breed,
-            name,
-            gender,
-            diet,
-            last_bred,
-            health_status,
-            offspring: goat.offspring,
-            cost: goat.cost,
-            weight: goat.weight,
-            current_price: goat.current_price,
-        })
-    }
-
-    /// Returns a fixed-size array of references to parameters that implement `ToSql` for rusqlite.
-    ///
-    /// These values are tied to the lifetime of the `GoatParams` instance.
-    pub fn as_params(&self) -> [&(dyn ToSql + Sync); 10] {
-        [
-            &self.breed,
-            &self.name,
-            &self.gender,
-            &self.offspring,
-            &self.cost,
-            &self.weight,
-            &self.current_price,
-            &self.diet,
-            &self.last_bred,
-            &self.health_status,
-        ]
-    }
-    pub fn as_update_params<'a>(&'a self, id: &'a i64) -> impl rusqlite::Params + 'a {
-        (
-            &self.breed,
-            &self.name,
-            &self.gender,
-            &self.offspring,
-            &self.cost,
-            &self.weight,
-            &self.current_price,
-            &self.diet,
-            &self.last_bred,
-            &self.health_status,
-            id,
-        )
     }
 }

@@ -3,14 +3,21 @@
 use chrono::NaiveDate;
 use rand::{Rng, seq::SliceRandom};
 use rusqlite::{Connection, Result, params};
+use tracing::{info, trace};
+use tracing_subscriber;
 
 fn main() -> Result<()> {
-    let conn = Connection::open("sample_livestock.db")?;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("trace")
+        .with_test_writer()
+        .try_init();
+    let conn = Connection::open("livestock.db")?;
 
     // Load schema from file or ensure created manually before running this
 
     let mut rng = rand::thread_rng();
 
+    info!("Inserting vaccines");
     // Insert vaccines
     let vaccines = vec!["Rabies", "CDT", "Clostridium", "FootAndMouth"];
     for vaccine in &vaccines {
@@ -19,8 +26,10 @@ fn main() -> Result<()> {
             params![vaccine],
         )?;
     }
+    info!("vaccines table generated");
 
     // Insert diseases
+    info!("Inserting diseases");
     let diseases = vec!["FootRot", "Mastitis", "Parasites", "Pneumonia"];
     for disease in &diseases {
         conn.execute(
@@ -28,6 +37,7 @@ fn main() -> Result<()> {
             params![disease],
         )?;
     }
+    info!("diseases table generated");
 
     // Helper random date generator
     fn random_date(start: &str, end: &str) -> NaiveDate {
@@ -81,6 +91,7 @@ fn main() -> Result<()> {
         let last_bred = random_date("2024-01-01", "2025-08-01").to_string();
         let health_status = if i % 15 == 0 { "recovering" } else { "healthy" };
 
+        trace!("Inserting goat");
         conn.execute(
             "INSERT INTO goats (breed, name, gender, offspring, cost, weight, current_price, diet, last_bred, health_status)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -89,6 +100,7 @@ fn main() -> Result<()> {
 
         let goat_id = conn.last_insert_rowid();
 
+        trace!("Inserting vaccine");
         // Assign random vaccines to goat
         let count = rng.gen_range(1..=3);
         let assigned_vaccine_ids = vaccine_ids
@@ -103,6 +115,7 @@ fn main() -> Result<()> {
             )?;
         }
 
+        trace!("Insert disease");
         // Assign random diseases to goat (mostly none or few)
         let count = rng.gen_range(1..=2);
         let assigned_disease_ids = disease_ids
@@ -115,6 +128,7 @@ fn main() -> Result<()> {
                 "INSERT INTO goat_diseases (goat_id, disease_id) VALUES (?1, ?2)",
                 params![goat_id, d_id],
             )?;
+            trace!("Inserted Goat");
         }
     }
 

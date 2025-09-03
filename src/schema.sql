@@ -3,7 +3,7 @@
 CREATE TABLE IF NOT EXISTS goats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     breed TEXT NOT NULL,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     gender TEXT CHECK(gender IN ('Male', 'Female')) NOT NULL,
     offspring INTEGER DEFAULT 0,
     cost REAL,

@@ -7,11 +7,11 @@
 //! It ensures that the server only starts after a successful migration,
 //! preventing runtime errors related to schema mismatch.
 
+use actix_cors::Cors;
 use actix_web::{App, HttpServer, middleware, web};
 use backend::db::DbPool;
 use backend::handlers::goats;
-use rusqlite::Connection;
-use tracing::{error, info};
+use tracing::info;
 use tracing_subscriber;
 
 /// Main asynchronous function to configure and start the backend server.
@@ -46,6 +46,13 @@ async fn main() -> std::io::Result<()> {
     // Register logging middleware and route definitions.
     HttpServer::new(move || {
         App::new()
+            .wrap(
+                Cors::default()
+                    .allowed_origin("http://127.0.0.1:8080/")
+                    .allow_any_origin()
+                    .allow_any_method()
+                    .allow_any_header(),
+            )
             .wrap(middleware::Logger::default()) // Logs every request at info level.
             .app_data(web::Data::new(db_pool.clone()))
             .service(

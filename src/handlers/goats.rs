@@ -1,5 +1,3 @@
-//! HTTP handlers managing CRUD operations for the Goat entity in the livestock backend.
-//!
 //! This module handles creation, retrieval, updating, and deletion of goats,
 //! including managing their associated vaccines and diseases as normalized data.
 //!
@@ -9,12 +7,14 @@
 //! All operations return structured errors using the `AppError` type to communicate
 //! clear feedback to API clients while logging internal errors for troubleshooting.
 
-use crate::db::{DbPool, get_or_insert_disease, get_or_insert_vaccine};
-use crate::db_helpers::GoatParams;
+use crate::db::{DbPool, get_or_insert_disease, get_or_insert_vaccine, row_to_goat};
+use crate::db_helpers::{breed_to_str, gender_to_str};
 use crate::errors::AppError;
-use crate::models::{Goat, IdPayload};
+use crate::models::NamePayload;
 use actix_web::{HttpResponse, Responder, web};
-use tracing::{debug, error, info, trace, warn};
+use rusqlite::params;
+use shared::{Breed, Gender, GoatParams};
+use tracing::{debug, info, trace, warn};
 
 /// Handler for retrieving the full list of goats with complete details.
 ///
@@ -35,23 +35,21 @@ pub async fn get_goats(db: web::Data<DbPool>) -> Result<impl Responder, AppError
     debug!("GET /goats called");
     let conn = db.get_conn()?;
     debug!("Acquired connection in get_goats");
-    let mut stmt = conn.prepare("SELECT id FROM goats")?;
-    let goat_ids = stmt.query_map([], |row| row.get(0))?;
+    let mut stmt = conn
+        .prepare("SELECT * FROM goats")
+        .map_err(AppError::DbError)?;
+    let goats: Result<Vec<GoatParams>, rusqlite::Error> = stmt
+        .query_map([], |row| {
+            row_to_goat(row).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        })?
+        .collect();
 
-    let mut goats = Vec::new();
-    for id_res in goat_ids {
-        let id = id_res?;
-        trace!(goat_id = id, "Loading goat details");
-        match db.load_goat_details(&conn, id) {
-            Ok(goat) => goats.push(goat),
-            Err(e) => {
-                error!(goat_id = id, error=?e, "Failed to load goat details");
-                return Err(e);
-            }
-        }
-    }
+    let goats = goats?; // propagate or handle your error here
+
     info!("Returning {} goats", goats.len());
-    Ok(HttpResponse::Ok().json(goats))
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .json(goats))
 }
 
 /// Handler for adding a new goat along with vaccinations and diseases.
@@ -75,19 +73,29 @@ pub async fn get_goats(db: web::Data<DbPool>) -> Result<impl Responder, AppError
 /// - Info: Upon successful commit.
 pub async fn add_goat(
     db: web::Data<DbPool>,
-    new_goat: web::Json<Goat>,
+    new_goat: web::Json<GoatParams>,
 ) -> Result<impl Responder, AppError> {
     debug!(name = %new_goat.name, "POST /goats called");
     let mut conn = db.get_conn()?;
     info!("Connection recieved in add_goat instance");
 
     let tx = conn.transaction()?;
-    let params = GoatParams::new(&new_goat)?;
 
     tx.execute(
         "INSERT INTO goats (breed, name, gender, offspring, cost, weight, current_price, diet, last_bred, health_status) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        &params.as_params(),
+        params![
+            Breed::to_str(&new_goat.breed),
+            &new_goat.name,
+            Gender::to_str(&new_goat.gender),
+            &new_goat.offspring,
+            &new_goat.cost,
+            &new_goat.weight,
+            &new_goat.current_price,
+            &new_goat.diet,
+            &new_goat.last_bred,
+            &new_goat.health_status,
+        ]
     )?;
 
     let goat_id = tx.last_insert_rowid();
@@ -138,61 +146,83 @@ pub async fn add_goat(
 /// - Warn/Error: For missing record or update failures.
 pub async fn update_goat(
     db: web::Data<DbPool>,
-    goat: web::Json<Goat>,
+    goat: web::Json<GoatParams>,
 ) -> Result<impl Responder, AppError> {
-    let id = goat.id.ok_or_else(|| {
-        error!("Goat ID not valid");
-        AppError::InvalidInput("Goat ID required for update".to_string())
-    })?;
+    let name = &goat.name;
 
-    info!(goat_id = id, "PUT /goats called");
+    info!(goat_name = name, "PUT /goats called");
 
     let mut conn = db.get_conn()?;
     let tx = conn.transaction()?;
 
-    let goat_params = GoatParams::new(&goat)?;
-    let params = goat_params.as_update_params(&id);
     debug!("Params loaded in update_goat");
 
     let affected = tx.execute(
         "UPDATE goats 
-         SET breed = ?, name = ?, gender = ?, offspring = ?, cost = ?, weight = ?, current_price = ?, diet = ?, last_bred = ?, health_status = ? 
-         WHERE id = ?",
-        params,
+         SET breed = ?, gender = ?, offspring = ?, cost = ?, weight = ?, current_price = ?, diet = ?, last_bred = ?, health_status = ? 
+         WHERE name = ?",
+        params![
+            Breed::to_str(&goat.breed),
+            Gender::to_str(&goat.gender),
+            &goat.offspring,
+            &goat.cost,
+            &goat.weight,
+            &goat.current_price,
+            &goat.diet,
+            &goat.last_bred,
+            &goat.health_status,
+            &goat.name,
+        ],
     )?;
 
     if affected == 0 {
-        warn!(goat_id = id, "No goat found for update");
+        warn!(goat_name = name, "No goat found for update");
         return Err(AppError::InvalidInput(format!(
-            "No goat found with id {}",
-            id
+            "No goat found with name {}",
+            name
         )));
-    }
-
-    tx.execute("DELETE FROM goat_vaccines WHERE goat_id = ?", &[&id])?;
-    tx.execute("DELETE FROM goat_diseases WHERE goat_id = ?", &[&id])?;
-    debug!(goat_id = id, "Cleared old vaccine and disease links");
-
-    for vaccine in &goat.vaccinations {
-        let vaccine_id = get_or_insert_vaccine(&tx, vaccine)?;
+    } else {
+        // Delete existing links for the goat
         tx.execute(
-            "INSERT INTO goat_vaccines (goat_id, vaccine_id) VALUES (?, ?)",
-            &[&id, &vaccine_id],
+            "DELETE FROM goat_vaccines WHERE goat_id IN (SELECT id FROM goats WHERE name = ?1 LIMIT 1)",
+            [&name],
         )?;
-        trace!(goat_id = id, vaccine_id, "Linked vaccine");
-    }
-
-    for disease in &goat.diseases {
-        let disease_id = get_or_insert_disease(&tx, disease)?;
         tx.execute(
-            "INSERT INTO goat_diseases (goat_id, disease_id) VALUES (?, ?)",
-            &[&id, &disease_id],
+            "DELETE FROM goat_diseases WHERE goat_id IN (SELECT id FROM goats WHERE name = ?1 LIMIT 1)",
+            [&name],
         )?;
-        trace!(goat_id = id, disease_id, "Linked disease");
+        debug!(goat_name = name, "Cleared old vaccine and disease links");
+
+        // Fetch goat id
+        let goat_id: i64 = tx.query_row(
+            "SELECT id FROM goats WHERE name = ?1 LIMIT 1",
+            [&name],
+            |row| row.get(0),
+        )?;
+
+        // Insert updated vaccine links
+        for vaccine in &goat.vaccinations {
+            let vaccine_id = get_or_insert_vaccine(&tx, vaccine)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO goat_vaccines (goat_id, vaccine_id) VALUES (?, ?)",
+                &[&goat_id, &vaccine_id],
+            )?;
+        }
+        // Insert updated disease links
+        for disease in &goat.diseases {
+            let disease_id = get_or_insert_disease(&tx, disease)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO goat_diseases (goat_id, disease_id) VALUES (?, ?)",
+                &[&goat_id, &disease_id],
+            )?;
+        }
     }
 
     tx.commit()?;
-    info!(goat_id = id, "Updated goat and associations successfully");
+    info!(
+        goat_name = name,
+        "Updated goat and associations successfully"
+    );
     Ok(HttpResponse::Ok().body("Goat updated"))
 }
 
@@ -216,21 +246,21 @@ pub async fn update_goat(
 /// - Info: Successful deletion.
 pub async fn delete_goat(
     db: web::Data<DbPool>,
-    id_payload: web::Json<IdPayload>,
+    name: web::Json<NamePayload>,
 ) -> Result<impl Responder, AppError> {
-    info!(goat_id = id_payload.id, "DELETE /goats called");
+    info!(goat_id = name.name, "DELETE /goats called");
 
     let conn = db.get_conn()?;
-    let affected = conn.execute("DELETE FROM goats WHERE id = ?", &[&id_payload.id])?;
+    let affected = conn.execute("DELETE FROM goats WHERE name = ?", &[&name.name])?;
 
     if affected == 0 {
-        warn!(goat_id = id_payload.id, "Goat not found for deletion");
+        warn!(goat_id = name.name, "Goat not found for deletion");
         return Err(AppError::InvalidInput(format!(
-            "No goat found with id {}",
-            id_payload.id
+            "No goat found with name {}",
+            name.name
         )));
     }
 
-    info!(goat_id = id_payload.id, "Goat deleted successfully");
+    info!(goat_id = name.name, "Goat deleted successfully");
     Ok(HttpResponse::Ok().body("Goat deleted"))
 }

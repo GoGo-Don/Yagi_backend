@@ -11,14 +11,14 @@
 //! Errors are carefully mapped to the app’s unified `AppError` type.
 
 use crate::db_helpers::{str_to_breed, str_to_gender};
-use crate::errors::AppError;
-use crate::models::{DiseaseRef, Goat, VaccineRef};
+use crate::errors::{AppError, ParseEnumError};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
+use shared::{Breed, DiseaseRef, Gender, GoatParams, VaccineRef};
 //use refinery::embed_migrations;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction};
 use std::sync::Arc;
-use tracing::{debug, info, trace};
+use tracing::{error, info, trace};
 
 // Embed refinery migrations located inside the `migrations` directory under `src`.
 //embed_migrations!("migrations");
@@ -75,149 +75,102 @@ impl DbPool {
     pub fn get_conn(&self) -> Result<PooledConnection<SqliteConnectionManager>, AppError> {
         self.pool.get().map_err(AppError::PoolError)
     }
+}
+/// Maps a SQLite row from the `goats` table to a fully validated and parsed `Goat` struct.
+///
+/// This method converts string fields into Rust enums and returns application-level parse errors as necessary.
+/// It does not load related vaccinations or diseases; use `load_goat_details` for full loading.
+///
+/// # Errors
+/// Returns `AppError::ParseError` if enum parsing fails or `DbError` if any DB row field retrieval fails.
+///
+/// # Logging
+/// Emits trace-level logs indicating mapping operations.
+pub fn row_to_goat(row: &Row) -> Result<GoatParams, AppError> {
+    trace!("Mapping DB row to Goat struct");
+    let breed_str: String = row.get(1)?;
+    let gender_str: String = row.get(3)?;
 
-    /// Maps a SQLite row from the `goats` table to a fully validated and parsed `Goat` struct.
-    ///
-    /// This method converts string fields into Rust enums and returns application-level parse errors as necessary.
-    /// It does not load related vaccinations or diseases; use `load_goat_details` for full loading.
-    ///
-    /// # Errors
-    /// Returns `AppError::ParseError` if enum parsing fails or `DbError` if any DB row field retrieval fails.
-    ///
-    /// # Logging
-    /// Emits trace-level logs indicating mapping operations.
-    pub fn row_to_goat(row: &Row) -> Result<Goat, AppError> {
-        trace!("Mapping DB row to Goat struct");
-        let breed_str: String = row.get(1)?;
-        let gender_str: String = row.get(3)?;
+    let breed = Breed::from_str(&breed_str);
+    let gender = Gender::from_str(&gender_str).map_err(|e| {
+        error!(e);
+        AppError::ParseError(ParseEnumError::new(&e, "Gender"))
+    })?;
 
-        let breed = str_to_breed(&breed_str)?;
-        let gender = str_to_gender(&gender_str)?;
+    Ok(GoatParams {
+        breed,
+        name: row.get(2)?,
+        gender,
+        offspring: row.get(4)?,
+        cost: row.get(5)?,
+        weight: row.get(6)?,
+        current_price: row.get(7)?,
+        diet: row.get(8)?,
+        last_bred: row.get(9).ok(),
+        health_status: row.get(10)?,
+        vaccinations: Vec::new(),
+        diseases: Vec::new(),
+    })
+}
 
-        Ok(Goat {
-            id: row.get(0)?,
-            breed,
-            name: row.get(2)?,
-            gender,
-            offspring: row.get(4)?,
-            cost: row.get(5)?,
-            weight: row.get(6)?,
-            current_price: row.get(7)?,
-            diet: row.get(8)?,
-            last_bred: row.get(9).ok(),
-            health_status: row.get(10)?,
-            vaccinations: Vec::new(),
-            diseases: Vec::new(),
-        })
-    }
+/// Fetches the list of vaccine references associated with a goat.
+///
+/// # Errors
+/// Returns database errors that occur during querying.
+///
+/// # Logging
+/// Traces the fetch initiation and debugs the result count.
+pub fn fetch_vaccines(conn: &Connection, goat_id: i64) -> Result<Vec<VaccineRef>, AppError> {
+    trace!(goat_id, "Fetching vaccine list");
 
-    /// Loads full details of a goat, including related vaccines and diseases by goat ID.
-    ///
-    /// Performs multiple queries under the same DB lock to guarantee consistent view of data.
-    ///
-    /// # Arguments
-    /// * `goat_id` - The unique identifier of the goat to load.
-    ///
-    /// # Errors
-    /// Propagates database access or parsing errors as application errors.
-    ///
-    /// # Logging
-    /// Records debug-level messages for loading steps and loaded relation counts.
-    pub fn load_goat_details(
-        &self,
-        conn: &PooledConnection<SqliteConnectionManager>,
-        goat_id: i64,
-    ) -> Result<Goat, AppError> {
-        debug!(goat_id, "Loading full goat details from database");
+    let mut stmt = conn.prepare(
+        "SELECT v.id, v.name FROM vaccines v INNER JOIN goat_vaccines gv ON v.id = gv.vaccine_id WHERE gv.goat_id = ?1"
+    ).map_err(AppError::DbError)?;
 
-        let statement = String::from("SELECT * FROM goats WHERE id = ?1");
-        let mut stmt = conn.prepare(&statement).map_err(AppError::DbError)?;
-        trace!("Prepared {} for loading goat details", &statement);
+    let vaccines: Vec<VaccineRef> = stmt
+        .query_map([goat_id], |row| {
+            {
+                Ok(VaccineRef {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                })
+            }
+        })?
+        .filter_map(Result::ok)
+        .collect();
 
-        let mut goat = stmt.query_row([goat_id], |row| {
-            Self::row_to_goat(row).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
-        })?;
+    trace!(goat_id, count = vaccines.len(), "Retrieved vaccines");
+    Ok(vaccines)
+}
 
-        goat.vaccinations = self.fetch_vaccines(conn, goat_id)?;
-        goat.diseases = self.fetch_diseases(conn, goat_id)?;
+/// Fetches the list of disease references associated with a goat.
+///
+/// # Errors
+/// Returns database errors that occur during querying.
+///
+/// # Logging
+/// Tracks the fetch process with detailed trace and debug logs.
+pub fn fetch_diseases(conn: &Connection, goat_id: i64) -> Result<Vec<DiseaseRef>, AppError> {
+    trace!(goat_id, "Fetching disease list");
 
-        debug!(
-            %goat_id,
-            vaccines_count = goat.vaccinations.len(),
-            diseases_count = goat.diseases.len(),
-            "Successfully loaded related vaccines and diseases"
-        );
+    let mut stmt = conn.prepare(
+        "SELECT d.id, d.name FROM diseases d INNER JOIN goat_diseases gd ON d.id = gd.disease_id WHERE gd.goat_id = ?1"
+    )?;
 
-        Ok(goat)
-    }
+    let diseases: Vec<DiseaseRef> = stmt
+        .query_map([goat_id], |row| {
+            {
+                Ok(DiseaseRef {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                })
+            }
+        })?
+        .filter_map(Result::ok)
+        .collect();
 
-    /// Fetches the list of vaccine references associated with a goat.
-    ///
-    /// # Errors
-    /// Returns database errors that occur during querying.
-    ///
-    /// # Logging
-    /// Traces the fetch initiation and debugs the result count.
-    pub fn fetch_vaccines(
-        &self,
-        conn: &Connection,
-        goat_id: i64,
-    ) -> Result<Vec<VaccineRef>, AppError> {
-        trace!(goat_id, "Fetching vaccine list");
-
-        let mut stmt = conn.prepare(
-            "SELECT v.id, v.name FROM vaccines v INNER JOIN goat_vaccines gv ON v.id = gv.vaccine_id WHERE gv.goat_id = ?1"
-        ).map_err(AppError::DbError)?;
-
-        let vaccines: Vec<VaccineRef> = stmt
-            .query_map([goat_id], |row| {
-                {
-                    Ok(VaccineRef {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                    })
-                }
-            })?
-            .filter_map(Result::ok)
-            .collect();
-
-        trace!(goat_id, count = vaccines.len(), "Retrieved vaccines");
-        Ok(vaccines)
-    }
-
-    /// Fetches the list of disease references associated with a goat.
-    ///
-    /// # Errors
-    /// Returns database errors that occur during querying.
-    ///
-    /// # Logging
-    /// Tracks the fetch process with detailed trace and debug logs.
-    pub fn fetch_diseases(
-        &self,
-        conn: &Connection,
-        goat_id: i64,
-    ) -> Result<Vec<DiseaseRef>, AppError> {
-        trace!(goat_id, "Fetching disease list");
-
-        let mut stmt = conn.prepare(
-            "SELECT d.id, d.name FROM diseases d INNER JOIN goat_diseases gd ON d.id = gd.disease_id WHERE gd.goat_id = ?1"
-        )?;
-
-        let diseases: Vec<DiseaseRef> = stmt
-            .query_map([goat_id], |row| {
-                {
-                    Ok(DiseaseRef {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                    })
-                }
-            })?
-            .filter_map(Result::ok)
-            .collect();
-
-        trace!(goat_id, count = diseases.len(), "Retrieved diseases");
-        Ok(diseases)
-    }
+    trace!(goat_id, count = diseases.len(), "Retrieved diseases");
+    Ok(diseases)
 }
 
 /// Runs all embedded refinery migrations on the provided connection,
@@ -229,21 +182,21 @@ impl DbPool {
 /// # Logging
 /// Logs migration success and applied migration info at info level,
 /// or failure at error level.
-pub fn run_migrations(conn: &mut Connection) -> Result<(), AppError> {
-    info!("Migrations disabled currently!");
-    //info!("Running database migrations...");
-    //match embedded_migrations::run(conn) {
-    //    Ok(report) => {
-    //        info!(affected = ?report.applied_migrations(), "Migrations applied");
-    //        Ok(())
-    //    }
-    //    Err(e) => {
-    //        error!("Migration failure: {:?}", e);
-    //        Err(AppError::DbError(rusqlite::Error::ExecuteReturnedResults))
-    //    }
-    //}
-    Ok(())
-}
+// pub fn run_migrations(conn: &mut Connection) -> Result<(), AppError> {
+//     info!("Migrations disabled currently!");
+//info!("Running database migrations...");
+//match embedded_migrations::run(conn) {
+//    Ok(report) => {
+//        info!(affected = ?report.applied_migrations(), "Migrations applied");
+//        Ok(())
+//    }
+//    Err(e) => {
+//        error!("Migration failure: {:?}", e);
+//        Err(AppError::DbError(rusqlite::Error::ExecuteReturnedResults))
+//    }
+//}
+//    Ok(())
+//}
 
 /// Attempts to fetch the ID of the vaccine by name in the given transaction.
 /// Inserts the vaccine if missing, ensuring referential integrity.

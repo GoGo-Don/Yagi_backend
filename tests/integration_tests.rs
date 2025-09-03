@@ -1,7 +1,8 @@
+use std::io::stdin;
+
 use actix_web::{App, test, web};
 use backend::db::DbPool;
 use backend::handlers::goats::{add_goat, delete_goat, get_goats, update_goat};
-use backend::models::Goat;
 use serde_json::json;
 use tracing::{debug, info};
 use tracing_subscriber;
@@ -29,7 +30,7 @@ async fn test_db_connection() {
 async fn test_get_goats_endpoint() {
     // Initialize tracing logger (does nothing if already initialized)
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
+        .with_env_filter("trace")
         .with_test_writer()
         .try_init();
 
@@ -86,7 +87,7 @@ async fn test_add_goat_endpoint() {
     // Prepare JSON payload for new goat
     let new_goat = json!({
         "breed": "Beetal",
-        "name": "TestGoat",
+        "name": "NewGoat1",
         "gender": "Male",
         "offspring": 1,
         "cost": 100.0,
@@ -138,11 +139,10 @@ async fn test_update_goat_endpoint() {
 
     // Example of goat data with an existing id (adjust id according to your test DB)
     let updated_goat = json!({
-        "id": 3,
         "breed": "Beetal",
-        "name": "UpdatedName",
+        "name": "NewGoat",
         "gender": "Female",
-        "offspring": 2,
+        "offspring": 9,
         "cost": 110.0,
         "weight": 55.0,
         "current_price": 130.0,
@@ -163,11 +163,10 @@ async fn test_update_goat_endpoint() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), 200);
-
     // Optionally, print body for debug
-    let body_bytes = test::read_body(resp).await;
-    let body_str = std::str::from_utf8(&body_bytes).unwrap_or("<invalid utf8>");
-    debug!("Response body: {}", body_str);
+    // let body_bytes = test::read_body(resp).await;
+    // let body_str = std::str::from_utf8(&body_bytes).unwrap_or("<invalid utf8>");
+    // debug!("Response body: {}", body_str);
 }
 
 //ToDo: Delete goat has to take a hardcoded id
@@ -189,11 +188,11 @@ async fn test_delete_goat_endpoint() {
     .await;
 
     // Provide the ID of the goat to delete (adjust based on your test DB content)
-    let id_payload = json!({ "id": 2});
+    let name_payload = json!({ "name": "NewGoat8"});
 
     let req = test::TestRequest::delete()
         .uri("/goats")
-        .set_json(&id_payload)
+        .set_json(&name_payload)
         .to_request();
 
     let resp = test::call_service(&app, req).await;
